@@ -1,3 +1,9 @@
+# Unreleased
+
+* Add `prepared_key_cache` feature: `verify_bls_signature` keeps the public
+  keys most recently verified against decoded and prepared for the pairing,
+  about a fifth of each verification. Needs `std`.
+
 
 # 0.6 - 2024-08-09
 

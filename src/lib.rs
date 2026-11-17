@@ -10,6 +10,9 @@
 
 use core::fmt;
 
+#[cfg(feature = "prepared_key_cache")]
+mod prepared_key_cache;
+
 use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
 use bls12_381::{G1Affine, G1Projective, G2Affine, Scalar};
 use pairing::group::Curve;
@@ -91,32 +94,16 @@ impl PublicKey {
             return Err(());
         }
 
-        let msg = hash_to_g1(message);
-
         #[cfg(feature = "alloc")]
         {
-            use bls12_381::{multi_miller_loop, G2Prepared};
-            use pairing::group::Group;
-
-            let g2_gen: &G2Prepared = &G2PREPARED_NEG_G;
-            let pk = G2Prepared::from(self.pk);
-
-            let sig_g2 = (&signature.sig, g2_gen);
-            let msg_pk = (&msg, &pk);
-
-            let x = multi_miller_loop(&[sig_g2, msg_pk]).final_exponentiation();
-
-            if bool::from(x.is_identity()) {
-                Ok(())
-            } else {
-                Err(())
-            }
+            verify_with_prepared_key(&bls12_381::G2Prepared::from(self.pk), message, signature)
         }
 
         #[cfg(not(feature = "alloc"))]
         {
             use bls12_381::pairing;
 
+            let msg = hash_to_g1(message);
             let g2 = G2Affine::generator();
             let lhs = pairing(&signature.sig, &g2);
             let rhs = pairing(&msg, &self.pk);
@@ -127,6 +114,32 @@ impl PublicKey {
                 Err(())
             }
         }
+    }
+}
+
+/// The pairing check of [`PublicKey::verify`], for a key already prepared:
+/// `pk` must come from a public key that is not the identity element.
+#[cfg(feature = "alloc")]
+fn verify_with_prepared_key(
+    pk: &bls12_381::G2Prepared,
+    message: &[u8],
+    signature: &Signature,
+) -> Result<(), ()> {
+    use bls12_381::{multi_miller_loop, G2Prepared};
+    use pairing::group::Group;
+
+    let msg = hash_to_g1(message);
+    let g2_gen: &G2Prepared = &G2PREPARED_NEG_G;
+
+    let sig_g2 = (&signature.sig, g2_gen);
+    let msg_pk = (&msg, pk);
+
+    let x = multi_miller_loop(&[sig_g2, msg_pk]).final_exponentiation();
+
+    if bool::from(x.is_identity()) {
+        Ok(())
+    } else {
+        Err(())
     }
 }
 
@@ -270,8 +283,24 @@ impl PrivateKey {
 ///
 /// The signature must be exactly 48 bytes (compressed G1 element)
 /// The key must be exactly 96 bytes (compressed G2 element)
+///
+/// With the `prepared_key_cache` feature, the keys most recently verified
+/// against are kept decoded and prepared for the pairing, which is most of
+/// the cost of using a key that is not the signature's: a verifier checks
+/// nearly everything against the same few keys (the IC root key, a handful
+/// of subnet keys).
 pub fn verify_bls_signature(sig: &[u8], msg: &[u8], key: &[u8]) -> Result<(), ()> {
     let sig = Signature::deserialize(sig).map_err(|_| ())?;
-    let pk = PublicKey::deserialize(key).map_err(|_| ())?;
-    pk.verify(msg, &sig)
+
+    #[cfg(feature = "prepared_key_cache")]
+    {
+        let pk = prepared_key_cache::prepared(key)?;
+        verify_with_prepared_key(&pk, msg, &sig)
+    }
+
+    #[cfg(not(feature = "prepared_key_cache"))]
+    {
+        let pk = PublicKey::deserialize(key).map_err(|_| ())?;
+        pk.verify(msg, &sig)
+    }
 }
