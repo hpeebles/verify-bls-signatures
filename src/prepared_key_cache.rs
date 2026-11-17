@@ -104,6 +104,9 @@ mod tests {
         assert!(verify_bls_signature(&signature, b"another message", &first_pk).is_err());
         let other = key(2).sign(message).serialize();
         assert!(verify_bls_signature(&other, message, &first_pk).is_err());
+        let mut identity_signature = [0u8; crate::Signature::BYTES];
+        identity_signature[0] = 0xc0;
+        assert!(verify_bls_signature(&identity_signature, message, &first_pk).is_err());
 
         // The identity element and undecodable encodings are refused every
         // time, and never cached.
