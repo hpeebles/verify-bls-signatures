@@ -26,8 +26,40 @@ use std::sync::Mutex;
 /// nothing beside the pairing.
 const CAPACITY: usize = 64;
 
-/// Most recently used first.
-static CACHE: Mutex<Vec<([u8; PublicKey::BYTES], Arc<G2Prepared>)>> = Mutex::new(Vec::new());
+struct Cache {
+    /// Most recently used first.
+    entries: Vec<([u8; PublicKey::BYTES], Arc<G2Prepared>)>,
+    hits: u64,
+    misses: u64,
+}
+
+static CACHE: Mutex<Cache> = Mutex::new(Cache {
+    entries: Vec::new(),
+    hits: 0,
+    misses: 0,
+});
+
+/// The prepared key cache's size, and its hits and misses since the process
+/// started.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct PreparedKeyCacheStatistics {
+    /// Keys held now.
+    pub size: usize,
+    /// Lookups that found their key prepared.
+    pub hits: u64,
+    /// Lookups that did not, and so decoded and prepared it (or refused it).
+    pub misses: u64,
+}
+
+/// The cache's statistics, as the replica's own key caches report theirs.
+pub(crate) fn statistics() -> PreparedKeyCacheStatistics {
+    let cache = lock();
+    PreparedKeyCacheStatistics {
+        size: cache.entries.len(),
+        hits: cache.hits,
+        misses: cache.misses,
+    }
+}
 
 /// `key` decoded and prepared, from the cache or freshly. Refuses, as
 /// [`PublicKey::deserialize`] and [`PublicKey::verify`] do, an encoding that
@@ -50,22 +82,26 @@ pub(crate) fn prepared(key: &[u8]) -> Result<Arc<G2Prepared>, ()> {
 
 fn lookup(key: &[u8; PublicKey::BYTES]) -> Option<Arc<G2Prepared>> {
     let mut cache = lock();
-    let index = cache.iter().position(|(cached, _)| cached == key)?;
+    let Some(index) = cache.entries.iter().position(|(cached, _)| cached == key) else {
+        cache.misses += 1;
+        return None;
+    };
+    cache.hits += 1;
     // To the front, as the most recently used: the hot keys stay where a
     // lookup reaches them first, and a hit on the front entry moves nothing.
-    cache[..=index].rotate_right(1);
-    Some(cache[0].1.clone())
+    cache.entries[..=index].rotate_right(1);
+    Some(cache.entries[0].1.clone())
 }
 
 fn insert(key: [u8; PublicKey::BYTES], prepared: Arc<G2Prepared>) {
     let mut cache = lock();
     // Two callers racing to prepare the same key each insert it; keep one.
-    cache.retain(|(cached, _)| cached != &key);
-    cache.insert(0, (key, prepared));
-    cache.truncate(CAPACITY);
+    cache.entries.retain(|(cached, _)| cached != &key);
+    cache.entries.insert(0, (key, prepared));
+    cache.entries.truncate(CAPACITY);
 }
 
-fn lock() -> std::sync::MutexGuard<'static, Vec<([u8; PublicKey::BYTES], Arc<G2Prepared>)>> {
+fn lock() -> std::sync::MutexGuard<'static, Cache> {
     // A panic while the lock is held leaves only whole entries behind, each
     // a correct preparation of its key, so the cache stays usable.
     CACHE
@@ -86,6 +122,7 @@ mod tests {
 
     fn cached(public_key: &[u8]) -> bool {
         lock()
+            .entries
             .iter()
             .any(|(cached, _)| cached.as_slice() == public_key)
     }
@@ -99,9 +136,15 @@ mod tests {
         let first = key(1);
         let first_pk = first.public_key().serialize();
         let signature = first.sign(message).serialize();
+        let before = statistics();
         assert!(verify_bls_signature(&signature, message, &first_pk).is_ok());
         assert!(cached(&first_pk));
         assert!(verify_bls_signature(&signature, message, &first_pk).is_ok());
+        // The first use missed and the second hit.
+        let after = statistics();
+        assert_eq!(after.misses - before.misses, 1);
+        assert_eq!(after.hits - before.hits, 1);
+        assert_eq!(after.size, lock().entries.len());
 
         // A cached key still refuses what it did not sign.
         assert!(verify_bls_signature(&signature, b"another message", &first_pk).is_err());
@@ -131,7 +174,7 @@ mod tests {
             let pk = k.public_key().serialize();
             assert!(verify_bls_signature(&k.sign(message).serialize(), message, &pk).is_ok());
         }
-        assert_eq!(lock().len(), CAPACITY);
+        assert_eq!(lock().entries.len(), CAPACITY);
         assert!(!cached(&first_pk));
         assert!(verify_bls_signature(&signature, message, &first_pk).is_ok());
         assert!(cached(&first_pk));

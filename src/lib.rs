@@ -13,6 +13,16 @@ use core::fmt;
 #[cfg(feature = "prepared_key_cache")]
 mod prepared_key_cache;
 
+#[cfg(feature = "prepared_key_cache")]
+pub use prepared_key_cache::PreparedKeyCacheStatistics;
+
+/// The size, hits and misses of the cache of prepared public keys that
+/// [`verify_bls_signature`] keeps with the `prepared_key_cache` feature.
+#[cfg(feature = "prepared_key_cache")]
+pub fn prepared_key_cache_statistics() -> PreparedKeyCacheStatistics {
+    prepared_key_cache::statistics()
+}
+
 use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
 use bls12_381::{G1Affine, G1Projective, G2Affine, Scalar};
 use pairing::group::Curve;

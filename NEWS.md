@@ -1,9 +1,9 @@
 # Unreleased
 
-* Add `prepared_key_cache` feature: `verify_bls_signature` keeps the 64 public
-  keys most recently verified against decoded and prepared for the pairing,
-  about a fifth of each verification. Needs `std`.
-
+* Add `prepared_key_cache` feature: `verify_bls_signature` caches the
+  most recently used public keys in their prepared form, cache hits
+  reduce instructions per verification by ~22%. Needs `std`.
+* `prepared_key_cache_statistics` reports that cache's size, hits and misses.
 
 # 0.6 - 2024-08-09
 
