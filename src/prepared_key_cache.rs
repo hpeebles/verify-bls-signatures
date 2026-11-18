@@ -19,9 +19,12 @@ use bls12_381::G2Prepared;
 use std::sync::Mutex;
 
 /// Keys kept. A verifier of IC certificates uses the root key and one key per
-/// subnet it hears from, so a handful is plenty; past this the least recently
-/// used goes.
-const CAPACITY: usize = 16;
+/// subnet it hears from, and the IC has a few dozen subnets, so this holds
+/// every key even a verifier hearing from all of them uses; past it the least
+/// recently used goes. Each prepared key is about 20KB, so a full cache is
+/// about 1.3MB, and a lookup compares at most this many 96-byte keys, which is
+/// nothing beside the pairing.
+const CAPACITY: usize = 64;
 
 /// Most recently used first.
 static CACHE: Mutex<Vec<([u8; PublicKey::BYTES], Arc<G2Prepared>)>> = Mutex::new(Vec::new());
@@ -48,10 +51,10 @@ pub(crate) fn prepared(key: &[u8]) -> Result<Arc<G2Prepared>, ()> {
 fn lookup(key: &[u8; PublicKey::BYTES]) -> Option<Arc<G2Prepared>> {
     let mut cache = lock();
     let index = cache.iter().position(|(cached, _)| cached == key)?;
-    let entry = cache.remove(index);
-    let prepared = entry.1.clone();
-    cache.insert(0, entry);
-    Some(prepared)
+    // To the front, as the most recently used: the hot keys stay where a
+    // lookup reaches them first, and a hit on the front entry moves nothing.
+    cache[..=index].rotate_right(1);
+    Some(cache[0].1.clone())
 }
 
 fn insert(key: [u8; PublicKey::BYTES], prepared: Arc<G2Prepared>) {
@@ -132,5 +135,20 @@ mod tests {
         assert!(!cached(&first_pk));
         assert!(verify_bls_signature(&signature, message, &first_pk).is_ok());
         assert!(cached(&first_pk));
+
+        // That evicted the oldest of the rest. A hit makes a key the most
+        // recently used, so the next eviction passes over it for the one
+        // after.
+        let verify = |n: u8| {
+            let k = key(n);
+            let pk = k.public_key().serialize();
+            assert!(verify_bls_signature(&k.sign(message).serialize(), message, &pk).is_ok());
+            pk
+        };
+        let refreshed = verify(11);
+        let next = key(12).public_key().serialize();
+        verify(200);
+        assert!(cached(&refreshed));
+        assert!(!cached(&next));
     }
 }

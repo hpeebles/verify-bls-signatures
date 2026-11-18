@@ -18,9 +18,9 @@ hex = { version = "0.4", optional = true, default-features = false }
 default = ["alloc", "rand"]
 rand = ["dep:rand"]
 alloc = ["bls12_381/alloc", "lazy_static", "hex/alloc"]
-# Keeps the public keys most recently verified against decoded and prepared
-# for the pairing, about a fifth of each verification. Needs `std` for its
-# lock.
+# Keeps the 64 public keys most recently verified against decoded and
+# prepared for the pairing, about a fifth of each verification. Needs `std`
+# for its lock.
 prepared_key_cache = ["alloc"]
 
 [dev-dependencies]
